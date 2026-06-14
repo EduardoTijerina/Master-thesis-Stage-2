@@ -1,50 +1,74 @@
 import numpy as np
 import os
-from PIL import Image
-from datasets import Dataset, Features, Sequence, Value, Image as HFImage
+import json
+import pandas as pd
+from pathlib import Path
 
 def create_dummy_lerobot_dataset(output_dir="dummy_g1_dataset", num_episodes=10, frames_per_ep=20):
-    os.makedirs(output_dir, exist_ok=True)
-    
-    data = {
-        "observation.image": [],
-        "observation.state": [],
-        "action": [],
-        "episode_index": [],
-        "frame_index": [],
-        "timestamp": []
-    }
-    
-    # Unitree G1 approximate dimensions
-    state_dim = 23  # Joint positions
-    action_dim = 23 # Joint targets
-    
-    for ep in range(num_episodes):
-        for frame in range(frames_per_ep):
-            # Generate fake 512x512 RGB image
-            fake_img_array = np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)
-            fake_img = Image.fromarray(fake_img_array)
-            
-            data["observation.image"].append(fake_img)
-            data["observation.state"].append(np.random.randn(state_dim).tolist())
-            data["action"].append(np.random.randn(action_dim).tolist())
-            data["episode_index"].append(ep)
-            data["frame_index"].append(frame)
-            data["timestamp"].append(frame * 0.1) # 10Hz dummy timestamp
+    root = Path(output_dir)
+    meta_dir = root / "meta"
+    data_dir = root / "data" / "chunk-000"
+    video_dir = root / "videos" / "chunk-000" / "observation.images.head_cam"
 
-    # Define strict features for LeRobot compatibility
-    features = Features({
-        "observation.image": HFImage(),
-        "observation.state": Sequence(Value("float32")),
-        "action": Sequence(Value("float32")),
-        "episode_index": Value("int64"),
-        "frame_index": Value("int64"),
-        "timestamp": Value("float32")
-    })
-    
-    dataset = Dataset.from_dict(data, features=features)
-    dataset.save_to_disk(output_dir)
-    print(f"Successfully generated {num_episodes} dummy episodes at ./{output_dir}")
+    for d in [meta_dir, data_dir, video_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    state_dim = 23
+    action_dim = 23
+    fps = 10
+
+    # --- meta/tasks.jsonl ---
+    with open(meta_dir / "tasks.jsonl", "w") as f:
+        f.write(json.dumps({"task_index": 0, "task": "Perform a handshake with the human."}) + "\n")
+
+    # --- meta/episodes.jsonl ---
+    with open(meta_dir / "episodes.jsonl", "w") as f:
+        for ep in range(num_episodes):
+            f.write(json.dumps({"episode_index": ep, "tasks": [0], "length": frames_per_ep}) + "\n")
+
+    # --- meta/info.json ---
+    info = {
+        "robot_type": "unitree_g1",
+        "fps": fps,
+        "total_episodes": num_episodes,
+        "total_frames": num_episodes * frames_per_ep,
+        "features": {
+            "observation.images.head_cam": {"dtype": "video", "shape": [512, 512, 3]},
+            "observation.state": {"dtype": "float32", "shape": [state_dim]},
+            "action": {"dtype": "float32", "shape": [action_dim]},
+        }
+    }
+    with open(meta_dir / "info.json", "w") as f:
+        json.dump(info, f, indent=2)
+
+    # --- meta/modality.json (GR00T-specific) ---
+    modality = {
+        "video": {"head_cam": {"original_key": "observation.images.head_cam"}},
+        "state": {"joint_positions": {"original_key": "observation.state", "delta_indices": [0]}},
+        "action": {"joint_positions": {"original_key": "action", "delta_indices": list(range(16))}}
+    }
+    with open(meta_dir / "modality.json", "w") as f:
+        json.dump(modality, f, indent=2)
+
+    # --- Per-episode parquet files ---
+    for ep in range(num_episodes):
+        rows = []
+        for frame in range(frames_per_ep):
+            rows.append({
+                "observation.state": np.random.randn(state_dim).astype(np.float32).tolist(),
+                "action": np.random.randn(action_dim).astype(np.float32).tolist(),
+                "episode_index": ep,
+                "frame_index": frame,
+                "timestamp": round(frame / fps, 4),
+                "task_index": 0,
+                # Video frames are stored as MP4, not inline — reference only
+                "observation.images.head_cam": f"videos/chunk-000/observation.images.head_cam/episode_{ep:06d}.mp4"
+            })
+        df = pd.DataFrame(rows)
+        df.to_parquet(data_dir / f"episode_{ep:06d}.parquet", index=False)
+
+    print(f"✅ Generated {num_episodes} episodes at ./{output_dir}")
+    print(f"   Structure: meta/ + data/chunk-000/ + videos/")
 
 if __name__ == "__main__":
     create_dummy_lerobot_dataset()
