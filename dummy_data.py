@@ -1,5 +1,4 @@
 import numpy as np
-import os
 import json
 import pandas as pd
 from pathlib import Path
@@ -13,8 +12,8 @@ def create_dummy_lerobot_dataset(output_dir="dummy_g1_dataset", num_episodes=10,
     for d in [meta_dir, data_dir, video_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    state_dim = 23
-    action_dim = 23
+    state_dim = 53   # G1 body (29) + Inspire hands (24) = 53 total DOFs
+    action_dim = 53
     fps = 10
 
     # --- meta/tasks.jsonl ---
@@ -42,10 +41,23 @@ def create_dummy_lerobot_dataset(output_dir="dummy_g1_dataset", num_episodes=10,
         json.dump(info, f, indent=2)
 
     # --- meta/modality.json (GR00T-specific) ---
+    # delta_indices covers all 53 joints — tells GR00T to treat all action dims as deltas
     modality = {
-        "video": {"head_cam": {"original_key": "observation.images.head_cam"}},
-        "state": {"joint_positions": {"original_key": "observation.state", "delta_indices": [0]}},
-        "action": {"joint_positions": {"original_key": "action", "delta_indices": list(range(16))}}
+        "video": {
+            "head_cam": {"original_key": "observation.images.head_cam"}
+        },
+        "state": {
+            "joint_positions": {
+                "original_key": "observation.state",
+                "delta_indices": [0]
+            }
+        },
+        "action": {
+            "joint_positions": {
+                "original_key": "action",
+                "delta_indices": list(range(53))
+            }
+        }
     }
     with open(meta_dir / "modality.json", "w") as f:
         json.dump(modality, f, indent=2)
@@ -61,13 +73,13 @@ def create_dummy_lerobot_dataset(output_dir="dummy_g1_dataset", num_episodes=10,
                 "frame_index": frame,
                 "timestamp": round(frame / fps, 4),
                 "task_index": 0,
-                # Video frames are stored as MP4, not inline — reference only
                 "observation.images.head_cam": f"videos/chunk-000/observation.images.head_cam/episode_{ep:06d}.mp4"
             })
         df = pd.DataFrame(rows)
         df.to_parquet(data_dir / f"episode_{ep:06d}.parquet", index=False)
 
     print(f"✅ Generated {num_episodes} episodes at ./{output_dir}")
+    print(f"   state_dim={state_dim}, action_dim={action_dim}, fps={fps}")
     print(f"   Structure: meta/ + data/chunk-000/ + videos/")
 
 if __name__ == "__main__":
