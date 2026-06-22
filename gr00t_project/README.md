@@ -87,6 +87,16 @@ python stage3_export/convert_hdf5_to_lerobot.py \
   --output-dir ./handshake_dataset
 ```
 
+### Published dataset
+
+The converted LeRobot v2 dataset (100 episodes) is published on the Hugging
+Face Hub: [EduardoTij/g1-handshake-dataset](https://huggingface.co/datasets/EduardoTij/g1-handshake-dataset)
+
+```python
+from datasets import load_dataset
+ds = load_dataset("EduardoTij/g1-handshake-dataset")
+```
+
 ### Transfer to lab server
 
 ```bash
