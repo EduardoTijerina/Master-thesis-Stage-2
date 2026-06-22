@@ -1,0 +1,27 @@
+{
+  "observation": {
+    "images": {
+      "head_cam": {
+        "original_key": "observation.images.head_cam",
+        "delta_indices": [0],
+        "shape": [3, 480, 640]
+      }
+    },
+    "state": {
+      "joint_positions": {
+        "original_key": "observation.state",
+        "delta_indices": [0],
+        "shape": [53],
+        "dtype": "float32"
+      }
+    }
+  },
+  "action": {
+    "joint_positions": {
+      "original_key": "action",
+      "delta_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      "shape": [53],
+      "dtype": "float32"
+    }
+  }
+}

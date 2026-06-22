@@ -237,4 +237,7 @@ outputs/
 # Jetson local wheels
 *.whl
 dummy_g1_dataset/
+gr00t_project/hdf5_episodes/
+gr00t_project/handshake_dataset/
+*.h5
 
