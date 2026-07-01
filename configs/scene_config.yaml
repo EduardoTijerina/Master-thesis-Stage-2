@@ -1,0 +1,27 @@
+scene:
+  room_usd: "/Isaac/Environments/Simple_Room/simple_room.usd"
+  # G1 + Revo2 hands asset: 51 DOF total = 29 body + 22 hand (11 per Revo2 hand).
+  # The earlier Inspire-hands variant was 53 DOF (29 body + 24 hand) — do not mix
+  # datasets; see hdf5_episodes_inspire_backup/.
+  g1_usd: "/home/eduardot/gr00t_project/assets/g1_revo2_clean.usd"
+  g1_start_position: [0.0, 0.0, 0.95]
+  physics_dt: 0.016667
+  render_dt: 0.1
+
+camera:
+  name: "head_cam"
+  prim_path: "/World/G1/head_link/head_cam"  # <-- Update this to match the GUI exactly!
+  resolution: [640, 480]
+
+recording:
+  fps: 10
+  output_dir: "/mnt/data/gr00t_data/hdf5_episodes"
+  max_episodes: 100  # pipeline-test scale; bump to 1000+ for the real-motion run (DiffIK + per-episode randomization)
+  frames_per_episode: 100  # 10 seconds at 10Hz
+  expected_dof: 51  # Stage 3 aborts if recorded joint dim != this (guards against the 53-DOF Inspire backups)
+  action_horizon: 40  # number of future action steps GR00T predicts; emitted as action delta_indices in meta/modality.json (matches GR00T N1.7 AH=40)
+
+handshake:
+  human_approach_distance: 1.2   # meters
+  contact_duration_frames: 20
+  task_string: "perform a handshake"
