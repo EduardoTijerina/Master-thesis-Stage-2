@@ -24,9 +24,12 @@ handshake: human_approach_distance, contact_duration_frames, task_string
   `recording.*`, `camera.resolution`, `handshake.task_string`,
   `scene.g1_start_position`, `scene.room_usd`, `scene.g1_usd`,
   `scene.physics_dt`, `scene.render_dt`.
-- **Stage 3** (`convert_hdf5_to_lerobot.py`) does **not** read `scene_config.yaml`
-  at all — it only reads `configs/modality.json` (copied verbatim into the
-  output `meta/` folder) and takes everything else as CLI flags.
+- **Stage 3** (`convert_hdf5_to_lerobot.py`) reads `recording.{fps,action_horizon,
+  expected_dof}` from `scene_config.yaml` as CLI-overridable defaults, and infers
+  `state_dim`/`action_dim` from the first episode's actual arrays. It **generates**
+  `meta/modality.json` itself (it does not copy `configs/modality.json`); that
+  generated file is the authoritative one GR00T's `lerobot_episode_loader` consumes.
+  `configs/modality.json` is a kept-in-sync reference of the same flat schema.
 
 ⚠️ Stage 1 and Stage 2 resolve `scene.g1_usd` differently — Stage 1 uses it
 as a literal path, Stage 2 prefixes it with `assets_root`. See **Known
@@ -165,17 +168,17 @@ Execution order:
 4. `write_meta()` — after all episodes are converted:
    - `info.json` — dataset-level stats (`total_episodes`, `total_frames`,
      `fps`) plus a `features` block describing the shape/dtype of each
-     observation/action column. The image shape here is **hardcoded to
-     `[512, 512, 3]`** regardless of the actual recorded resolution (see
-     Known issues).
+     observation/action column. Image shape is `[480, 640, 3]` and
+     state/action shapes come from the inferred DOF count.
    - `tasks.jsonl` — single line mapping `task_index 0` → the task string.
    - `episodes.jsonl` — one line per episode: index, task list, length.
-   - `modality.json` — copied verbatim from `configs/modality.json` if it
-     exists; otherwise a fallback default is synthesized inline (this
-     fallback path exists so Stage 3 can still produce a usable dataset if
-     Stage 1's config file is missing, but it means the "real" modality
-     definition lives in `configs/modality.json`, and the in-script default
-     is a separate, easy-to-forget copy that can drift from it).
+   - `modality.json` — **generated here** (flat `video/state/action/annotation`
+     schema) from this run's actual camera name and DOF dims. Actions stay flat
+     in the parquet; the GR00T prediction horizon is expressed as action
+     `delta_indices = range(action_horizon)` (default 40, from
+     `recording.action_horizon`). This generated file — not
+     `configs/modality.json` — is what GR00T loads; `configs/modality.json` is a
+     synced reference of the same schema.
 
 Output: `handshake_dataset/{data,meta,videos}/...`, ready to `rsync` to the
 lab server.
@@ -188,7 +191,7 @@ scene_config.yaml ─┬─► build_handshake_scene.py  (interactive check, wri
                           │
                           ├─ reads room_usd/g1_usd (own path-resolution logic, see §1)
                           ├─ reads camera.prim_path/resolution
-                          ├─ STATE_DIM/ACTION_DIM hardcoded to 23 (ignores actual robot.num_dof)
+                          ├─ STATE_DIM/ACTION_DIM derived from g1.num_dof (51 for Revo2)
                           │
                           ▼
                    hdf5_episodes/episode_NNNN.h5  (×100, one per episode)
@@ -215,17 +218,17 @@ why config drift between them (see below) isn't caught until runtime.
 These affect the interactions described above and are worth fixing before
 the next real collection run:
 
-1. **`scene.g1_usd` points at the stock cloud G1, not your custom Inspire-hand
-   asset**, and Stage 1 vs Stage 2 resolve that path differently (literal
-   vs. `assets_root`-prefixed) — so today, neither stage reliably loads
-   `assets/g1_inspire_dfq_clean.usd`.
-2. **`STATE_DIM`/`ACTION_DIM = 23` is hardcoded** in both Stage 2 and Stage
-   3's CLI defaults, not derived from the robot's actual DOF count — once
-   the Inspire-hand robot (23 body + 12 hand DOF) is actually loaded, hand
-   joint data will be silently truncated.
-3. **Resolution mismatch**: `scene_config.yaml` captures at 640×480, but
-   `modality.json` and Stage 3's hardcoded `info.json` features both declare
-   512×512 — the exported metadata will misdescribe the actual video files.
+1. ~~`scene.g1_usd` path-resolution mismatch (Stage 1 literal vs Stage 2
+   `assets_root`-prefixed)~~ **RESOLVED**: both stages now load `scene.g1_usd`
+   as a literal path, pointing at the custom `assets/g1_revo2_clean.usd`
+   (51 DOF). Only `scene.room_usd` is `assets_root`-prefixed.
+2. ~~`STATE_DIM`/`ACTION_DIM = 23` hardcoded~~ **RESOLVED**: Stage 2 derives
+   both from `g1.num_dof` after `initialize()`; Stage 3 infers from the first
+   episode's arrays and now guards with `--expect-dof` (default 51).
+3. ~~Resolution mismatch (512×512 vs 640×480)~~ **RESOLVED**: `scene_config.yaml`,
+   the recorded HDF5, Stage 3's `info.json` features, and `modality.json` all
+   agree on 640×480 (`[480,640,3]` HxWxC). Stale "512×512" mentions in docstrings
+   have been corrected.
 4. **Stage 2's camera never gets the OAK-D Pro optics** that Stage 1 sets
    (`set_focal_length`/`set_horizontal_aperture`/`set_vertical_aperture`) —
    Stage 2's `Camera(...)` call only sets `translation` and `resolution`.

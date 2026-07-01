@@ -234,7 +234,7 @@ __marimo__/
 dataset/
 outputs/
 
-# GR00T pipeline - large binary assets/data kept off git (see Documentation/)
+# GR00T pipeline - large binary assets/data kept off git (see gr00t_project/Documentation/)
 *.h5
 *.usd.bak_*
 assets/
@@ -243,11 +243,9 @@ handshake_dataset_inspire_backup/
 hdf5_episodes_inspire_backup/
 handshake_dataset/
 hdf5_episodes/
+gr00t_project/hdf5_episodes/
+gr00t_project/handshake_dataset/
 
 # Jetson local wheels
 *.whl
-dummy_g1_dataset/
-gr00t_project/hdf5_episodes/
-gr00t_project/handshake_dataset/
-*.h5
 

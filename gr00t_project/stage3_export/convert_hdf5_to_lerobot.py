@@ -15,30 +15,51 @@ Run:
 
 state_dim/action_dim are inferred from the first episode's actual
 joint_pos/actions arrays, not hardcoded — this matches whatever DOF count
-Stage 2 recorded (body + Inspire hand joints) without needing to know it
-in advance.
+Stage 2 recorded (29 body + 22 Revo2 hand = 51 DOF) without needing to know it
+in advance. An --expect-dof guard aborts the run if the recorded dim differs
+(e.g. if pointed at the legacy 53-DOF Inspire backups).
 """
 
 import argparse
 import glob
 import json
 import os
+import subprocess
 
-import cv2
 import h5py
 import numpy as np
 import pandas as pd
+import yaml
 
-CONFIG_MODALITY = "/home/eduardot/gr00t_project/configs/modality.json"
+CONFIG_PATH = "/home/eduardot/gr00t_project/configs/scene_config.yaml"
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH) as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        return {}
 
 
 def parse_args():
+    cfg = load_config()
+    rec = cfg.get("recording", {}) if cfg else {}
     p = argparse.ArgumentParser(description="Convert HDF5 episodes to LeRobot v2")
-    p.add_argument("--input-dir", default="/home/eduardot/gr00t_project/hdf5_episodes")
-    p.add_argument("--output-dir", default="/home/eduardot/gr00t_project/handshake_dataset")
+    p.add_argument("--input-dir", default="/mnt/data/gr00t_data/hdf5_episodes")
+    p.add_argument("--output-dir", default="/mnt/data/gr00t_data/handshake_dataset")
     p.add_argument("--task", default="perform a handshake")
-    p.add_argument("--fps", type=int, default=10)
+    p.add_argument("--fps", type=int, default=int(rec.get("fps", 10)))
     p.add_argument("--camera-name", default="head_cam")
+    p.add_argument(
+        "--action-horizon", type=int, default=int(rec.get("action_horizon", 40)),
+        help="Number of future action steps (action delta_indices = range(N)) GR00T predicts.",
+    )
+    p.add_argument(
+        "--expect-dof", type=int, default=rec.get("expected_dof"),
+        help="Abort if the first episode's joint dim != this. Default: recording.expected_dof "
+             "from scene_config.yaml (None disables the check).",
+    )
     return p.parse_args()
 
 
@@ -54,15 +75,25 @@ def make_dirs(out_dir, camera_name):
 
 
 def write_video(frames, path, fps):
+    # Encode with libx264 via the system ffmpeg binary directly. cv2.VideoWriter's
+    # "avc1"/"mp4v" fourccs are unreliable here — they either silently fall back to
+    # MPEG-4 Part 2 or try a hardware h264_v4l2m2m encoder that fails to open. Most
+    # LeRobot/GR00T video loaders expect H.264, so encode that explicitly.
     h, w = frames.shape[1], frames.shape[2]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(path, fourcc, float(fps), (w, h))
-    if not writer.isOpened():
-        raise RuntimeError(f"cv2.VideoWriter failed to open for {path}")
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        path,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     for frame in frames:
-        # HDF5 stores RGB; cv2 expects BGR for correct colours on playback.
-        writer.write(cv2.cvtColor(frame.astype(np.uint8), cv2.COLOR_RGB2BGR))
-    writer.release()
+        proc.stdin.write(frame.astype(np.uint8).tobytes())
+    proc.stdin.close()
+    ret = proc.wait()
+    if ret != 0:
+        raise RuntimeError(f"ffmpeg (libx264) failed with exit code {ret} for {path}")
 
 
 def write_parquet(joint_pos, actions, ep_idx, fps, path):
@@ -81,7 +112,10 @@ def write_parquet(joint_pos, actions, ep_idx, fps, path):
     return T
 
 
-def write_meta(meta_dir, args, episode_lengths, state_dim, action_dim):
+CHUNKS_SIZE = 1000  # episodes per chunk dir; script writes a single chunk-000 today
+
+
+def write_meta(meta_dir, args, episode_lengths, state_dim, action_dim, action_horizon):
     total_episodes = len(episode_lengths)
     total_frames = int(sum(episode_lengths))
 
@@ -91,6 +125,9 @@ def write_meta(meta_dir, args, episode_lengths, state_dim, action_dim):
         "total_episodes": total_episodes,
         "total_frames": total_frames,
         "fps": args.fps,
+        "chunks_size": CHUNKS_SIZE,
+        "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+        "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
         "features": {
             f"observation.images.{args.camera_name}": {
                 "dtype": "video",
@@ -113,38 +150,40 @@ def write_meta(meta_dir, args, episode_lengths, state_dim, action_dim):
                 + "\n"
             )
 
-    # modality.json — copy from configs/ if present.
-    if os.path.exists(CONFIG_MODALITY):
-        with open(CONFIG_MODALITY) as f:
-            modality = json.load(f)
-    else:
-        modality = {
-            "observation": {
-                "images": {
-                    args.camera_name: {
-                        "original_key": f"observation.images.{args.camera_name}",
-                        "delta_indices": [0],
-                        "shape": [3, 512, 512],
-                    }
-                },
-                "state": {
-                    "joint_positions": {
-                        "original_key": "observation.state",
-                        "delta_indices": [0],
-                        "shape": [state_dim],
-                        "dtype": "float32",
-                    }
-                },
-            },
-            "action": {
-                "joint_positions": {
-                    "original_key": "action",
-                    "delta_indices": list(range(15)),
-                    "shape": [action_dim],
-                    "dtype": "float32",
-                }
-            },
-        }
+    # modality.json — flat top-level schema (video/state/action/annotation) required
+    # by GR00T's lerobot_episode_loader. Generated directly from this run's actual
+    # camera name and DOF dims rather than copied from a possibly-stale template.
+    #
+    # Actions stay flat (one row per frame) in the parquet; the prediction horizon is
+    # expressed here as action delta_indices = range(action_horizon). GR00T builds the
+    # (horizon, action_dim) target at train time from these indices — do NOT bake a
+    # lookahead array into the data.
+    modality = {
+        "video": {
+            args.camera_name: {
+                "original_key": f"observation.images.{args.camera_name}",
+            }
+        },
+        "state": {
+            "joint_positions": {
+                "original_key": "observation.state",
+                "start": 0,
+                "end": state_dim,
+                "delta_indices": [0],
+            }
+        },
+        "action": {
+            "joint_positions": {
+                "original_key": "action",
+                "start": 0,
+                "end": action_dim,
+                "delta_indices": list(range(action_horizon)),
+            }
+        },
+        "annotation": {
+            "human.task_description": {"original_key": "task_index"}
+        },
+    }
     with open(os.path.join(meta_dir, "modality.json"), "w") as f:
         json.dump(modality, f, indent=2)
 
@@ -169,6 +208,13 @@ def main():
 
         if state_dim is None:
             state_dim, action_dim = joint_pos.shape[1], actions.shape[1]
+            if args.expect_dof is not None and state_dim != args.expect_dof:
+                raise SystemExit(
+                    f"❌ DOF mismatch: {os.path.basename(fpath)} has joint dim {state_dim}, "
+                    f"but --expect-dof is {args.expect_dof}. Wrong --input-dir? "
+                    f"(The legacy Inspire dataset is 53 DOF; the current Revo2 dataset is 51.) "
+                    f"Pass --expect-dof <N> or set recording.expected_dof to override."
+                )
         elif joint_pos.shape[1] != state_dim or actions.shape[1] != action_dim:
             print(
                 f"⚠  {os.path.basename(fpath)} dims "
@@ -185,7 +231,7 @@ def main():
         episode_lengths.append(T)
         print(f"  ✅ {os.path.basename(fpath)} → episode_{ep_idx:06d} ({T} frames)")
 
-    write_meta(meta_dir, args, episode_lengths, state_dim, action_dim)
+    write_meta(meta_dir, args, episode_lengths, state_dim, action_dim, args.action_horizon)
     total_frames = int(sum(episode_lengths))
     print("  ✅ meta files written")
     print(

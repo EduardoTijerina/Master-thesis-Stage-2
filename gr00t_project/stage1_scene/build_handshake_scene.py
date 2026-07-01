@@ -55,9 +55,12 @@ def build_scene():
     add_reference_to_stage(usd_path=g1_usd, prim_path="/World/G1")
     stage = omni.usd.get_context().get_stage()
 
-    # Standing height: rest-pose foot sole is ~0.792 m below the pelvis origin, so
-    # lifting the pelvis to STAND_HEIGHT puts the feet flat on the ground plane.
-    STAND_HEIGHT = 0.793
+    # Standing height: rest-pose foot sole is ~0.792 m below the pelvis origin. The
+    # pelvis is rigidly pinned (the fixed joint holds the robot up), so we lift ~1.7 cm
+    # above flat-contact to keep the feet just clear of the ground plane. Grazing
+    # foot-ground contact under the pinned base + stiff leg drives is over-constrained
+    # and makes the solver jitter one leg (asymmetric, non-deterministic).
+    STAND_HEIGHT = 0.81
     # NOTE: must set the existing xformOp:translate directly. XformCommonAPI.SetTranslate
     # silently no-ops here because /World/G1 carries an xformOp:orient (quaternion),
     # which XformCommonAPI can't reconcile — the robot would spawn at Z=0 with its feet

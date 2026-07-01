@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-import the G1 Inspire DFQ URDF into a clean, self-contained USD."""
+"""Re-import the G1 + Revo2 hands URDF into a clean, self-contained USD."""
 from isaacsim import SimulationApp
 app = SimulationApp({"headless": True})
 
@@ -7,8 +7,8 @@ import omni.kit.commands
 import omni.usd
 from isaacsim.asset.importer.urdf import _urdf
 
-URDF = "/home/eduardot/unitree_ros/robots/g1_description/g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf"
-OUT_USD = "/home/eduardot/gr00t_project/assets/g1_inspire_dfq_clean.usd"
+URDF = "/home/eduardot/gr00t_project/3D model/g1_with_revo2/g1_with_revo2_hands.urdf"
+OUT_USD = "/home/eduardot/gr00t_project/assets/g1_revo2_clean.usd"
 
 cfg = _urdf.ImportConfig()
 # print available attributes for debugging
